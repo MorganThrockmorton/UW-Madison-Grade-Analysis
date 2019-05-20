@@ -1,0 +1,715 @@
+---
+title: "UW Madison Analysis Term Project"
+author: "Morgan Throckmorton"
+date: "May 2, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+For this project, I will be analyzing the data on grades given from 2006 to 2017 at the University of Wisconsin, Madison that can be found on Kaggle at [https://www.kaggle.com/Madgrades/uw-madison-courses](https://www.kaggle.com/Madgrades/uw-madison-courses). I will use this data to investigate and answer the following questions.
+
+1. For each of the roughly 193,000 course sections in this dataset, calculate the average of the grades for each course. Explain how you handled non-letter grades such as 'nr' and 'cr'. 
+
+2. Are there any courses, sections, or subjects that stand out as having the lowest average GPA or the highest average GPA?
+
+3. Do the grades given by the individual instructors seem to stay the same over time or do they have any type of trend over time? If there is a trend, is it consistent across instructors or do any vary among intructors?
+
+5. Which 5 subject areas had the most professors in 2017? Pick a subject area with many professors. Scrape data on the professor's ratings from rate my professor and determine if these ratings have any correlation with the overall average GPA assigned by the professor over a reasonable time period.
+
+Along with providing answers, I will be explaining how I approached the dataset and justify why I chose to use a particular method.
+
+
+## Exploring the Data
+
+Before starting anything, I wanted to first familiarize myself with the data. Without a big picture understanding of how all of the tables in the database related to each other, it would have been much more difficult to understand what I wanted to ultimately use. One of the first things I did was create the following relational database map.
+
+![](D:/uw-madison-courses/relational_database_map.jpg)
+
+I used this relational database map to help me understand the information I wanted to use and how I would strategically merge the data. After looking through the questions and considering what information would be most useful, I decided to omit the **rooms** table and the **schedules** table from my analysis. It seemed unlikely that the location of any particular class would have any widespread effect on the analysis of student's grades, so omitting the **rooms** table was a pretty easy decision. For the **schedules** table, my first thought was to use the *start_time* and the *end_time* to factor each of the classes into a "morning", "afternoon", or "evening" class, but after further consideration, I opted to make the focus on other factors that were likely to make a larger impact.
+
+## Cleaning the Data
+
+#### Term Codes
+
+One of the first pieces of information I wanted to collect was not available in the dataset but could be found at [http://www.bussvc.wisc.edu/bursar/termcode.html](http://www.bussvc.wisc.edu/bursar/termcode.html). This site contained the SIS term codes from the Bursar's Office that attach a year and a term--spring, summer, or fall--to the column *term_code* in the **course_offerings** table. I wanted to use this information for the analysis of grades so in order to collect it I just copied and pasted it into Excel and then imported it into R as the data frame **term_codes**. 
+
+```{r include=FALSE}
+library(readr)
+term_codes <- na.omit(data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/term_codes.csv", skip = 4)))
+# I used na.omit since I did not clean the data in excel and there were NA values in empty rows from copy and paste
+# I skipped the first 4 rows during the import as well since they contained NA values.
+```
+```{r}
+head(term_codes)
+```
+Then I cleaned this and converted it to a form that would make it easy to merge with other data later.
+```{r}
+fall <- term_codes[,c(1,4)]
+spring <- term_codes[,c(1,2)]
+fall$semester <- 'Fall'
+spring$semester <- 'Spring'
+colnames(fall) <- c('year','term_code','semester')
+colnames(spring) <- c('year','term_code','semester')
+term <- rbind(fall,spring)
+head(term, n = 2)
+tail(term, n = 2)
+```
+
+#### Course Offerings and Courses
+
+The next data I imported were the ***course_offerings** and **courses** tables.
+
+```{r include=FALSE}
+course_offerings <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/course_offerings.csv"))[,-4]
+# this list of names have missing values so we will want to use the names from the courses table
+courses <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/courses.csv"))[,-3]
+# the number is not unique according to the data dictionary
+```
+```{r}
+head(course_offerings, n = 3)
+head(courses, n = 3)
+```
+
+Note that I decided to omit *names* from the **course_offerings** table. This is because there were missing values and I would rather have merged the two tables together and use the names from the **courses** table. I also ommitted the *numbers* from the **courses** table since the data dictionary said these values were not unique. 
+
+I first changed the column names so that the data would properly merge.
+```{r}
+colnames(courses) <- c('course_uuid','course_name')
+colnames(course_offerings)[1] <- 'course_offering_uuid'
+```
+Then I merged the data together while omitting *course_uuid* since this was only needed to merge these two tables together.
+```{r}
+courses <- merge(course_offerings,courses)[,-1]
+head(courses, n = 3)
+```
+
+Now that I had the **courses** and **course_offerings** together, I merged it with **term_codes**. Since all I wanted from the *term_codes* was the *year* and *semester*, I chose to go ahead and remove *term_codes* from the data set as well.
+```{r}
+course_info <- merge(courses,term)[,-1]
+head(course_info, n = 3)
+```
+
+
+#### Subjects and Subject Memberships
+
+Next, I imported the **subjects** and **subject_memberships** tables. I removed *abbreviation* from the **subjects** table since I only wanted the full name of the subject of each class.
+
+```{r include=FALSE}
+subjects <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/subjects.csv"))[,-3]
+subject_memberships <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/subject_memberships.csv"))
+```
+
+```{r}
+head(subjects, n = 3)
+head(subject_memberships, n = 3)
+```
+
+Again, I changed the column names so that the two data frames could be merged together. Once I merged them together, I removed *subject_code* from the merged data.
+```{r}
+colnames(subjects) <- c('subject_code','subject_name')
+course_subjects <- merge(subject_memberships,subjects)[,-1]
+head(course_subjects,n = 3)
+```
+
+#### Teachings and Instructors
+
+Next, I imported the **teachings** and **instructors** tables and just as with the rest of the tables, I had to change around some of the column names before I merged the information together.
+```{r include=FALSE}
+teachings <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/teachings.csv"))
+instructors <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/instructors.csv"))
+```
+```{r}
+head(teachings, n = 3)
+head(instructors, n = 3)
+```
+I will change both of the column names of the **instructors** for this and then after I merge the data I will remove the *instructor_id* since it will not be used for anything else.
+
+```{r}
+colnames(instructors) <- c('instructor_id','instructor_name')
+professors <- merge(teachings,instructors)[,-1]
+head(professors, n = 3)
+```
+
+
+#### Grade Distributions
+
+Then I imported **grade_distributions** and left it as be for the moment.
+
+```{r include=FALSE}
+grade_distributions <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/grade_distributions.csv"))
+```
+```{r}
+head(grade_distributions, n = 3)
+```
+
+#### Sections
+
+The last table I imported before merging all of the information together was the **sections** dataframe. I omitted *room_uuid* and *schedule_uuid* since I would not be using those tables in the analysis. The column names wee changed to merge with future data.
+```{r include=FALSE}
+sections <- data.frame(read_csv("D:/uw-madison-courses/uw-madison-courses/sections.csv"))[,-c(5,6)]
+```
+```{r}
+head(sections, n = 3)
+```
+
+```{r}
+colnames(sections)[1] <- 'section_uuid'
+colnames(sections)[4] <- 'section_number'
+```
+
+Once I imported all of the data I wanted to use, my next objective was to merge the information together into one data frame. Once in a data frame, I would convert categorical data to factors and change the column names to prepare for anlaysis.
+
+#### Merging Everything Together
+
+One of my main concerns with merging data together is making sure that I keep track of all of the data. While there are many ways to check if a data frame is merged together properly, the two main techniques I use are checking the dimensions and checking for null values.
+
+Earlier, I merged some of the smaller dataframes together so that I could quickly clean it and prepare it to merge into one large data frame. Those merges were quite simple as nothing was lost in the process, there were no duplicated values, and merging them together did not create any NA values. The upcoming merges were a little more complicated as not every course offered is in the **grade_distributions** and for some class sections there are multiple teachers, so when I joined together the data it created duplicated grades. At this point in time, there were a total of five data frames I was working with.
+
+1. **course_info**
+2. **course_subjects**
+3. **grade_distributions**
+4. **professors**
+5. **sections**
+
+My first goal was to merge together *course_info* and *course_subjects* but first I wanted to check the dimensions.
+```{r}
+dim(course_info)
+dim(course_subjects)
+```
+
+Since *course_subjects* had more rows, I wanted to check the length of the number of unique elements in *course_offering_uuid* since it would be the value I would be later merging these data frames on.
+
+```{r}
+length(unique(course_subjects$course_offering_uuid))
+length(unique(course_info$course_offering_uuid))
+```
+
+Since they both had the same number of unique *course_offering_uuid*, I wanted to check why *course_subjects* had more elements so I found a duplicate value of 
+
+Since they both have the same number of unique *course_offering_uuid*, I want to check why then *course_subjects* has more elements so I found an example of a duplicate vale, b273329d-6200-3afd-af85-f795ad91f90f".
+
+```{r}
+course_subjects[which(course_subjects$course_offering_uuid == 'b273329d-6200-3afd-af85-f795ad91f90f'),-1]
+```
+
+To do a little more digging, I wanted to check the name of the class to see why it might have had 12 different subjects attached to it.
+```{r}
+course_info[which(course_info$course_offering_uuid == 'b273329d-6200-3afd-af85-f795ad91f90f'),-1]
+```
+Since this is an "Interdepartmental Seminar", it makes sense that this course is associated with 12 different subjects. So there are a couple of ways I could have gone about tackling this issue.
+
+1. Remove all duplicated values using "duplicated()" from dplyr. One of my concerns about that was that it would not make an educated decision about what values to keep and what values to get rid of. That is, the function would not decipher if this class is more of a "Latin American, Caribbean, and Iberian Studies" class or an "Economics" class, so the subjects that would be removed would be done at random and might not give a complete picture of grades by subject later down the line.
+
+2. I could have imported the data frame into Excel as a csv file and cleaned it by hand. This would have taken a lot of time and it would have included my own personal bias.
+
+3. I could keep all the values and end up with duplicate grades in the final table. The benefit of this would be that the *grade_distribution* by subject would be more accurately represented. My concern would be that all of the other values might be overrepresented. 
+
+Ultimately, I decided on option 3, but wanted to stay aware of these values throughout the course of my analysis.
+
+```{r}
+course_information <- merge(course_subjects,course_info)
+dim(course_information)[1]
+```
+
+Before making this decision, I wanted to evaluate what kind of an impact this might have on the data. So to get an idea of how many extra courses this might add, I wanted to observe the dimensions.
+
+```{r}
+dim(merge(course_information,grade_distributions))[1]
+```
+
+Then, I wanted to see the number of rows it added as well as the proportion of the data it would be.
+
+```{r}
+dim(merge(course_information,grade_distributions))[1] - dim(grade_distributions)[1]
+(dim(merge(course_information,grade_distributions))[1] - dim(grade_distributions)[1])/dim(merge(course_information,grade_distributions))[1]
+```
+
+Since the duplicated data made up approximately 8% of the data, I chose to keep them. I believed they would overall benefit the bigger picture and I could always choose to remove these values later. My next step then was to merge the two data frames together.
+
+```{r}
+course_grades <- merge(course_information,grade_distributions)
+```
+
+I then set aside **course_grades** so that I could focus on merging together **sections** and **professors**. And again, I wanted to check the dimensions.
+
+```{r}
+dim(sections)
+dim(professors)
+dim(merge(sections,professors))
+```
+
+What this told me is that I lost some of the information from **sections** when I merged it with **professors**. Knowing this, I wanted to view which information was lost to understand if it was useful.
+
+```{r include=FALSE}
+library(dplyr)
+```
+```{r}
+head(full_join(sections,professors)[!complete.cases(full_join(sections,professors)),], n = 2)
+```
+
+By doing this, I could check if any of the *course_offering_uuid* was in the **course_grades** table. It turns out that some of them were so I chose to do a full_join for these two tables.
+
+```{r}
+course_sections <- full_join(sections,professors)
+```
+I was able to find an example of a section that had multiple professors, that would explain why some of the data was lost during the merge. Here is an example:
+
+```{r}
+course_sections[which(course_sections$course_offering_uuid == '0005d259-9986-3184-b638-e0f23ed55040'),-c(1,2)]
+
+```
+
+Each section had 4 professors and I wanted to remove these duplicated before merging it with **course_grades**. I was not as concerned about which professors are duplicates since the majority of these classes were field or research courses and I would much rather do anlysis on classes such as "algebra" or "english communications" where duplicate teachers are not an issue. In order to remove these values, I used "count()" from plyr to determine their frequency, stored the *course_offering_uuid* with a frequency of 1 in a vector, and then merged those values into a new variable.
+
+```{r}
+x <- plyr::count(course_sections, vars = c('course_offering_uuid','section_number'))
+y <- x[which(x$freq == 1),]
+head(y,n = 3)
+
+madison_sections <- merge(y,course_sections)[,-3] # get rid of frequency variable
+```
+
+With this I could go ahead and merge **madison_sections** and **course_grades**.
+
+```{r}
+madison_grades <- merge(madison_sections,course_grades)
+dim(madison_grades)
+```
+
+Before merging the data together, **course_grades** had 211,762 rows. After merging, **madison_grades** was left with 186,925 rows. Taking that difference it would mean that there were 24,837 rows lost during the merge, which seemed like a lot; however, earlier I made the decision to duplicate some of the course_subjct information and some of those courses had multiple teachers so ultimately some of what I decided to keep I ended up throwing out anyways. The original **grade_distributions** had 193,262 rows and our data now has 186,925 rows, which really means I have retained approximately 96% of our original data. Some of that information might include the duplicated subjects, but either way I have managed not to lose too much information in the process of cleaning the data.
+
+My next step is to remove the columns from **madison_grades** that are not useful. I will remove *section_number* and *section_uuid*.
+```{r}
+madison_grades <- madison_grades[,-c(2,3)]
+```
+Then I changed the column names and factored all categorical data types.
+```{r}
+colnames(madison_grades) <- c('course_uuid','section_type','instructor','subject','course_name','year','semester','A','AB','B','BC','C','D','F','satisfactory','unsatisfactory','credit','no_credit','progress','incomplete','no_work','no_report','other')
+```
+```{r}
+madison_grades$course_uuid <- factor(madison_grades$course_uuid)
+madison_grades$section_type <- factor(madison_grades$section_type)
+madison_grades$instructor <- factor(madison_grades$instructor)
+madison_grades$subject <- factor(madison_grades$subject)
+madison_grades$course_name <- factor(madison_grades$course_name)
+madison_grades$year <- factor(madison_grades$year)
+madison_grades$semester <- factor(madison_grades$semester)
+str(madison_grades)
+```
+
+Once I had all the data in one data frame, I was able to move on to the analysis.
+
+## Analysis
+
+##### (a) Calculate the average gpa of each of the courses. Explain how you handled non-letter grades such as "nr" and "cr". 
+
+The first thing I wanted to do is add a column that calculated the *total_graded_students*. This would be the sum of all students who earned a letter grade. I would not count students who took the class as "credit" or "no credit", as they did not receive a grade.
+
+```{r}
+madison_grades$total_graded_students <- apply(madison_grades[,8:14], MARGIN = 1, sum)
+```
+In order to get a sense of how many students passed or failed the class, I created a column of *total_pass_fail_students*. This counted all of the students who received a letter grade and who took the class for "credit" or "no credit". This would not include any of the other students.
+
+```{r}
+madison_grades$total_pass_fail_students <- apply(madison_grades[,8:16], MARGIN = 1, sum)
+```
+
+Next I created a column of all of the students. Just by looking through some of the data, I knew that there were courses where no grades or students were recorded at all, so by countingn all of the students I could easily remove these values.
+
+```{r}
+madison_grades$all_students <- apply(madison_grades[,8:23], MARGIN = 1, sum)
+```
+Once done I wanted to see how many rows had no records.
+
+```{r}
+dim(madison_grades[which(madison_grades$all_students == 0),])
+```
+There were 98,194 rows that have no data so I removed those from **madison_grades**.
+
+```{r}
+madison_grades <- madison_grades[-which(madison_grades$all_students == 0),]
+```
+
+Before moving on to calculating the GPA, I created two columns that counted the number of students that passed the class and the number of students that failed the class. I defined passing as any students who received an A, AB, B, C, or Credit. Failing was defined as receiving a D, F, or No Credit.
+
+```{r}
+madison_grades$total_passing <- apply(madison_grades[,c(8,9,10,11,12,15)], MARGIN = 1, sum)
+
+madison_grades$total_failing <- apply(madison_grades[,c(13,14,16)], MARGIN = 1, sum)
+```
+
+
+I wanted to summarize this data later, but first I continued to work on calculating the GPA. I used the information provided at [https://registrar.wisc.edu/grades-and-gpa/](https://registrar.wisc.edu/grades-and-gpa/) to calculate the GPA for every course.
+
+**Grade** | ** Grade Points**
+----------|-------------------
+A	  | 4.0
+AB	  | 3.5
+B	  | 3.0
+BC	  | 2.5
+C	  | 2.0
+D	  | 1.0
+F	  | 0
+
+To calculate the grades, I multiplied the number of students who received a particular grade by the number of earned grade points. I then took the sum of all of the weighted values and divided by *total_graded_students* for each individual course.
+
+```{r}
+madison_grades$weighted_A <- madison_grades$A*4
+madison_grades$weighted_AB <- madison_grades$AB*3.5
+madison_grades$weighted_B <- madison_grades$B*3
+madison_grades$weighted_BC <- madison_grades$BC*2.5
+madison_grades$weighted_C <- madison_grades$C*2
+madison_grades$weighted_D <- madison_grades$D
+madison_grades$weighted_F <- 0
+madison_grades$total_weight <- apply(madison_grades[,29:35], MARGIN = 1, sum)
+madison_grades$class_gpa <- madison_grades$total_weight / madison_grades$total_graded_students
+```
+
+In order to get the average gpa for each course, I used "tapply()" to calculate the mean of the *class_gpa* by *course_uuid*. I stored these in a vector *average_gpa* and then merged that vector with **madison_grades**.
+
+```{r}
+average_gpa <- tapply(madison_grades$class_gpa, madison_grades$course_uuid, mean)
+average_gpa <- data.frame(course_uuid = names(average_gpa), average_gpa)
+madison_grades <- plyr::join(madison_grades,average_gpa)
+```
+
+Before I moved on to question (b), I normalized the gpa by calculating its Z-Score (Z = (X - mean)/sd) and then classified each individual GPA as above or below the the mean (0). This information may or may not be used later in a graphical representation.
+
+```{r}
+madison_grades$normalized_gpa <- (madison_grades$class_gpa - mean(madison_grades$class_gpa, na.rm = T))/sd(madison_grades$class_gpa, na.rm = T)
+madison_grades$gpa_classification <- ifelse(madison_grades$normalized_gpa < 0, 'below', 'above')
+```
+
+Now that I had all of the information I needed, I wanted to look at a summary of the *average_grade* for each course.
+
+```{r}
+summary(madison_grades$average_gpa)
+```
+
+It thought it might also be useful to see a histogram of the distribution of the average grades.
+
+```{r include = FALSE}
+library(ggplot2)
+```
+```{r}
+g1 <- ggplot(madison_grades, aes(average_gpa)) + theme_bw()
+g1_colors <- scale_fill_manual(values =c('#BA0000','#C90000','#D40202','#E60101','#F60404','#FF2E2E','#F54545','#F35656','#E96D6D','#E67D7D','#EE9C9C','#F5B9B9'))
+g1_labs <- labs(title='Histogram of Average GPA', x = 'Average GPA', y = 'Count')
+g1 + g1_colors + g1_labs + geom_histogram(aes(fill=year), binwidth = .19, col = 'black', size = .1)
+```
+
+##### (b) Are there any courses, sections, or subjects, that stand out as having the lowest average GPA or the highest average GPA?
+
+In order to find the average GPA for every subject, I used "tapply()" to store these values in a new data frame.
+
+```{r}
+subject_gpa_summary <- tapply(madison_grades$average_gpa[!is.na(madison_grades$average_gpa)], madison_grades$subject[!is.na(madison_grades$average_gpa)], mean)
+subject_gpa_summary <- na.omit(data.frame(subject = names(subject_gpa_summary), average_gpa = subject_gpa_summary))
+```
+
+I also sorted the data from lowest average_gpa to highest average_gpa and renamed the rows to clean it up a little bit.
+
+```{r}
+subject_gpa_summary <- subject_gpa_summary[order(subject_gpa_summary$average_gpa),]
+rownames(subject_gpa_summary) <- c(1:190)
+```
+I then wanted to take a moment to look at the highest and lowest average GPA's based on subject. 
+
+```{r}
+tail(subject_gpa_summary, n = 10)
+head(subject_gpa_summary, n = 10)
+```
+
+One of the variables that might influence how these grades are viewed is the total number of graded students that took each subject. I again used "tapply()" to find these values and then merged this data with the current *subject_gpa_summary* into a new data frame *gpa_analysis*.
+
+```{r}
+total_students <- tapply(madison_grades$total_graded_students, madison_grades$subject, sum)
+total_students <- na.omit(data.frame(subject = names(total_students), total_graded_students = total_students))
+gpa_analysis <- merge(subject_gpa_summary,total_students)
+gpa_analysis <- gpa_analysis[order(gpa_analysis$average_gpa),]
+```
+
+Now that I counted the number of students for each subject, I wanted to use a jitter plot to observe the relationship between the total number of graded students and average GPA.
+
+```{r include = FALSE}
+library(ggplot2)
+```
+```{r}
+p1 <- ggplot(gpa_analysis, aes(total_graded_students,average_gpa))
+p1_labs <- labs(title = "Jitter Plot", subtitle = "Total Students vs Average GPA by Subject", x = 'Total Graded Students', y = 'Average GPA')
+p1 + p1_labs + geom_jitter(width =.5, size = 1.5, col = 'red') + theme_bw()
+```
+
+One of the reasons I wanted to consider the number of students graded in each subject and compare it to the average GPA is because it would make sense that the less students that are graded, the more volatile the average GPA. 
+
+In order to account for this, I considered the subjects where the total number of graded students were above the 25th percentile of the data. To do this, I used the "quantile()" function to find the percentiles of *total_graded_students*. 
+
+```{r}
+quantile(gpa_analysis$total_graded_students)
+```
+
+With this information, I subset **gpa_analysis** to remove rows for which *total_graded_students* was below 2134.
+
+```{r}
+upper_75th <- gpa_analysis[which(gpa_analysis$total_graded_students > 2134),]
+```
+Then, I used this information to visualize the top 10 subjects with the highest average GPA and the top 10 subjects with the lowest average GPA.
+
+```{r}
+top10 <- tail(upper_75th, n = 10)
+top10$subject <- reorder(top10$subject,top10$average_gpa)
+p2 <- ggplot(top10, aes(subject,average_gpa)) + theme_bw() + ylim(3.8,4)
+p2_labs <- labs(title = 'Top 10 Average GPA By Subject', y = 'Average GPA', x = 'Course Subject')
+p2_lollipop <- geom_segment(aes(x = subject , xend = subject, y = 3.8, yend = average_gpa), color = 'red')
+p2 + p2_labs + p2_lollipop + geom_point(size = 3, color = 'red') + coord_flip()
+```
+```{r}
+bottom10 <- head(upper_75th, n = 10)
+bottom10$subject <- reorder(bottom10$subject,bottom10$average_gpa)
+p3 <- ggplot(bottom10, aes(subject,average_gpa)) + theme_bw() + ylim(3.1,3.4)
+p3_labs <- labs(title = 'Bottom 10 Average GPA by Subject', y = 'Average GPA', x = 'Course Subject')
+p3_lollipop <- geom_segment(aes(x = subject, xend = subject, y = 3.1, yend = average_gpa), color = 'blue')
+p3 + p3_labs + p3_lollipop + geom_point(size = 3, color = 'blue') + coord_flip()
+```
+
+In order to better understand these subjects, I wanted to take a look at some of the data associated with them.
+
+The first one I wanted to take a look at was the subject "Curriculum and Instruction". Since I had never heard of this subject before, I decided to go to University of Wisconsin's website to find out more information and maybe understand a little more background at [https://ci.education.wisc.edu/](https://ci.education.wisc.edu/). As a direct quote from the website
+
+*The Department of Curriculum and Instruction is a premier research and teaching unit devoted to understanding the complex world of teaching, learning, curriculum, and policy. World-class research is the foundation of our work preparing both the next generation of educational researchers as well as future teachers.* 
+
+What I found really interesting about this program is that it turns out this particular program at University of Wisconsin, Madison is ranked one of the top Curriculum and Instruction programs in the country. It is ranked as the #2 Best Curriculum and Instruction Program in 2019 by US News and World Report here [https://www.usnews.com/best-graduate-schools/top-education-schools/curriculum-instruction-rankings](https://www.usnews.com/best-graduate-schools/top-education-schools/curriculum-instruction-rankings) and was previously ranked #1 back in 2017 as chronicled in an article from the School of Education here [https://www.education.wisc.edu/soe/news-events/news/2016/03/16/u-s--news-again-ranks-uw-madison-school-of-education-no--1-among-public-institutions](https://www.education.wisc.edu/soe/news-events/news/2016/03/16/u-s--news-again-ranks-uw-madison-school-of-education-no--1-among-public-institutions). Countless of other sources note this as one of the top Education schools in the country, trailing behind Harvard, Stanford, and UCLA. I found this interesting since the data is supporting the fact that people who take the courses for the graduate program tend to do quite well.
+
+
+With that, I wanted to then take a look at the courses with the lowest average GPA. The most obvious subject with the lowest average GPA was the subject "Mathematics". This was particularly interesting because it was the subject with the highest number of graded students out of every subject. To better understand why Math had such a low average GPA, I wanted to observe more about the particular courses. 
+
+The first thing I did was take out all of the average GPA's that have "NA" values so that I could use tapply() to compute the average GPA for each course.
+```{r}
+madison_analysis <- madison_grades[!is.na(madison_grades$average_gpa),]
+```
+
+Now, similar to **subject_gpa_summary**, I found the average GPA of each individual course that is associated with the subject Mathematics.
+```{r}
+math_gpa <- tapply(madison_analysis$average_gpa[which(madison_analysis$subject == 'Mathematics')], 
+                   madison_analysis$course_name[which(madison_analysis$subject == 'Mathematics')], mean)
+math_gpa <- na.omit(data.frame(course = names(math_gpa), average_gpa = math_gpa))
+math_gpa <- math_gpa[order(math_gpa$average_gpa),]
+rownames(math_gpa) <- c(1:dim(math_gpa)[1])
+head(math_gpa, n = 10)
+tail(math_gpa, n = 10)
+```
+
+When the data was viewed in this manner, it seems less surprising that Mathematics is the subject with the lowest average GPA. Almost every student is required to take some form of mathematics during their college career and a large set of majors require at least basic algebra or trigonometry. Since almost everyone was required to take these courses, they have a lot of students which also means there are probably some classes that are outliers. In order to see these, I wanted to create a box plot of the top 20 mathematics courses with the lowest average GPA. First I subset the data into a data frame and then I used **math_top20** to create a box plot using ggplot2.
+
+```{r}
+math_top20 <- madison_analysis[madison_analysis$course_name %in% head(math_gpa$course, n = 20),]
+p4 <- ggplot(math_top20, aes(course_name, average_gpa)) + theme_bw()
+p4_labs <- labs(title = 'Mathematics Box Plot', subtitle = "Top 20 Lowest Average GPA", x = "Course Name",y = 'Class GPA')
+p4 + geom_boxplot(varwidth = T, fill = 'red') + p4_labs +  coord_flip()
+```
+
+From this visualization, it was clear that the average GPA of these courses ranged anywhere from around 2.5 to slightly more than 3.0. What was most interesting about these visual to me were the outliers. Trigonometry and Algebra were two of classes with the highest concentration of students and both had some very low outliers. Comparatively, Applied Mathematical Analysis and Intermediate Algebra had two of the lowest average GPA's but had two high outliers. 
+
+
+##### (c) Do the grades given by individual instructors seem to stay the same over time or do they have any type of trend over time? If there is a trend, is it consistent across instructors or does it vary among instructors?
+
+The first thing I did was calculate the average gpa for each instructor by year.
+
+```{r}
+yearly_gpa <- aggregate(madison_analysis$class_gpa, by = list(madison_analysis$instructor, madison_analysis$year), mean)
+colnames(yearly_gpa) <- c('instructor','year','year_gpa')
+head(yearly_gpa)
+```
+Then I counted the number of times a professor's name showed up. I wanted to analyze professors that had taught every year from 2006 to 2017 so I wanted to analyze professors with a frequency count of 12.
+
+```{r}
+w <- plyr::count(yearly_gpa, vars = c('instructor'))
+w <- w[which(w$freq == 12),]
+head(w)
+dim(w)
+
+```
+This left 428 professors. I then merged **yearly_gpa** and **w** together.
+
+```{r}
+yearly_gpa <- merge(yearly_gpa,w)
+yearly_gpa <- yearly_gpa[,-4] # remove frequency from data
+```
+
+By doing this, now I could calculate the variance of the average gpa by year for each professor.
+
+```{r}
+gpa_var <- aggregate(year_gpa ~ instructor, data = yearly_gpa, var)
+colnames(gpa_var)[2] <- 'variance'
+summary(gpa_var$variance)
+```
+
+Overall, the variance of these professors was quite small. What this tells me is that more than likely, there is very little change in average GPA over the course of every year. This would probably vary slightly, and I can imagine that the variance is heavily dependent on the courses being taught, but overall their trend is pretty flat and there isn't a whole lot of fluctuation.
+
+One professor that did stand out to me was "Fabian Waleffe". This was one of the professors that showed up in the average GPA analysis as one of the professors that taught the math classes with the lowest average GPA. Now, he also showed up in the top 10 instructors with the highest average grade variance so I took a closer look at this professor and to see which classes he taught.
+
+```{r}
+gpa_var <- gpa_var[order(gpa_var$variance),]
+tail(gpa_var, n = 10)
+```
+
+First I subset **madison_analysis** into a new variable, **fabian**. Then I aggregated the data to get the average gpa based on the *course_name* and changed the column names so I could merge it back together with **fabian**. Finally I displayed a bar graph by year that showed the change in average GPA based on courses for each year.
+
+```{r}
+fabian <- madison_analysis[which(madison_analysis$instructor == 'FABIAN WALEFFE'), c(3:7,37)]
+fabian_summary <- aggregate(class_gpa ~ course_name + year, data = fabian, mean)
+head(fabian_summary)
+```
+```{r}
+colnames(fabian_summary)[3] <- 'avg_gpa'
+fabian <- merge(fabian,fabian_summary)
+```
+
+Once that was finished I was able to visualize the data.
+
+```{r}
+p5 <- ggplot(fabian, aes(x = year, y = avg_gpa, fill = course_name)) + theme_bw()
+p5_labs <- labs(title = 'Fabian Waleffe', subtitle = 'Average GPA of Courses by Year',x = 'Year', y = 'Average GPA')
+p5_color <- scale_fill_brewer(palette = 'Blues')
+p5 + p5_labs + p5_color + geom_bar(stat = 'identity', position = 'dodge', col = 'black')
+```
+
+What this graph told me is that the course "Applied Mathematical Analysis" was not only offered and taught by him every single year, but it also was consistently the course with the lowest average GPA regardless of the year. Having taken an applied mathematics course, this makes sense. The Applied Mathematics for Science and Engineering course at Sacramento State was one of the hardest courses I have ever taken. The math is complicated, and it is not only highly computational but it is also highly theoretical. The combination of the two makes for a very difficult course. The fact that Fabian Waleffe has taught this course for 12 years straight also suggests that his area of research is in applied mathematics which was easily confirmed with one quick visit to his school website page [https://www.math.wisc.edu/~waleffe/](https://www.math.wisc.edu/~waleffe/).
+
+##### (d) Which 5 subject areas had the most professors in 2017? Pick a subject area with many professors. Scrape the data on the professor's ratings from rate my professor and determine if these ratings have any correlation with the overal average GPA assigned by a professor.
+
+To answer this question, I first subset the data to include only data from 2017. 
+
+```{r}
+uw_2017 <- madison_analysis[which(madison_analysis$year == '2017'),]
+```
+
+Next I counted the number of classes of each subject each instructor taught.
+
+```{r}
+a <- plyr::count(uw_2017, vars = c('subject','instructor'))
+head(a, n = 3)
+```
+
+Since this counted the number of classes taught by individual instructors for each subject, I aggregated the sum of the number of classes taught by unique professors for each subject.
+```{r}
+b <- aggregate(freq ~ subject, a, sum)
+b <- b[order(b$freq),]
+tail(b)
+```
+
+Now this count did not technically show the subject with the most amount of professors; however, this count was a better representation of the distribution of the number of classes taught by individual professors at University of Madison. This was important because a subject might have a larger number of individual professors, but that could be because many professors only taught one class or maybe some other reason. I wanted to find the subjects with the most amount of teachers teaching the most amount of classes. This information was also consistent with all of the findings so far. English, Art Department, Math, Spanish, Communication, and Electrical and Computer Engineering have all showed up as classes in the top percentile of highest average gpa, lowest average gpa, or some other portion of the analysis. So the information I found was representative of the data.
+
+Since I am a math major, it was obviously most intriguing to me to scrape the data of the mathematics professors. As someone who has spent a lot of time on rate my professor and have read through reviews of all the professors I have taken, I am most interested to see the correlation of the reviews and average gpa.
+
+To do this, I first subset **uw_2017** to only show data for the subject Mathematics.
+
+```{r}
+uw_math <- uw_2017[which(uw_2017$subject == 'Mathematics'),]
+```
+
+Instead of counting the number of classes each professor taught, I counted the number of graded students each professor had. This increased the likelihood of finding a large number of reviews and the gpa would most likely be a more accurate reflection of how well people did in the course because there were more data points.
+
+```{r}
+students <- aggregate(total_graded_students ~ instructor, uw_math, sum)
+students <- students[order(students$total_graded_students),]
+tail(students, n = 5)
+```
+Using this, I took these five professors and scraped the data on rate my professor of their ratings and level of difficulty.
+
+```{r include = FALSE}
+library(rvest)
+```
+```{r}
+prof1 <- html_text(html_nodes(read_html('https://www.ratemyprofessors.com/ShowRatings.jsp?tid=1852275'),'.breakdown-header .grade'))
+prof1 <- trimws(prof1, which = c('both'))
+prof1 <- as.numeric(unlist(strsplit(prof1,split = '%')))
+#Daniel Erman
+
+prof2 <- html_text(html_nodes(read_html('https://www.ratemyprofessors.com/ShowRatings.jsp?tid=2043547'),'.breakdown-header .grade'))
+prof2 <- trimws(prof2, which = c('both'))
+prof2 <- as.numeric(unlist(strsplit(prof2,split = '%')))
+#Tonghai Yang
+
+prof3 <- html_text(html_nodes(read_html('https://www.ratemyprofessors.com/ShowRatings.jsp?tid=1408142'),'.breakdown-header .grade'))
+prof3 <- trimws(prof3, which = c('both'))
+prof3 <- as.numeric(unlist(strsplit(prof3,split = '%')))
+#Laurentiu Maxim
+
+prof4 <- html_text(html_nodes(read_html('https://www.ratemyprofessors.com/ShowRatings.jsp?tid=1356509'),'.breakdown-header .grade'))
+prof4 <- trimws(prof4, which = c('both'))
+prof4 <- as.numeric(unlist(strsplit(prof4,split = '%')))
+#Joe Miller
+
+prof5 <- html_text(html_nodes(read_html('https://www.ratemyprofessors.com/ShowRatings.jsp?tid=2094033'),'.breakdown-header .grade'))
+prof5 <- trimws(prof5, which = c('both'))
+prof5 <- as.numeric(unlist(strsplit(prof5,split = '%')))
+#Alexander Hanhart
+```
+
+I then stores these in their respective variables and converted them into a data frame.
+
+```{r}
+ratings <- c(prof1[1], prof2[1], prof3[1], prof4[1], prof5[1])
+take_again <- c(prof1[2], prof2[2],prof3[2], prof4[2], prof5[2])
+difficulty <- c(prof1[3], prof2[3],prof3[3], prof4[3], prof5[3])
+instructor <- c('DANIEL ERMAN', 'TONGHAI YANG', 'LAURENTIU MAXIM', 'JOSEPH MILLER', 'ALEXANDER HANHART')
+prof_ratings <- data.frame(ratings, take_again, difficulty, instructor)
+prof_ratings
+```
+
+After that, I subset the data only for the math professors I scraped data for. I used the data from **madison_analysis** since the data on rate my professors is aggregated data and therefore it took into account information across all years. I also removed any information from **madison_analysis** that was unecessary.
+
+```{r}
+prof_analysis <- madison_analysis[madison_analysis$instructor %in% tail(students$instructor, n = 5),-c(1,2,8:24,26,29:36,38:40)]
+```
+
+Earlier, I calculated *total_passing* and *total_failing* and now I used those to calculate the proportion of students who are failing and passing. These were complimets of one another so P(passing) = 1 - P(failing).
+
+```{r}
+prof_analysis$p_failing <- prof_analysis$total_failing / prof_analysis$total_pass_fail_students
+prof_analysis$p_passing <- 1 - prof_analysis$p_failing
+```
+
+Then I calculated the average gpa for each professor and merged it back into **prof_analysis**.
+```{r}
+prof_gpa <- aggregate(class_gpa ~ instructor, prof_analysis, mean)
+colnames(prof_gpa)[2] <- "prof_avg"
+prof_gpa
+prof_analysis <- merge(prof_analysis,prof_gpa)
+```
+Finally I took **prof_ratings** and merged it together with **prof_analysis**. I then factored the difficulty to set it up for the visualization.
+
+```{r}
+prof_analysis <- merge(prof_analysis,prof_ratings)
+prof_analysis$difficulty <- factor(prof_analysis$difficulty)
+```
+
+Now that I had all the data that I needed, I created a scatter plot to analyze the data.
+
+```{r}
+p6 <- ggplot(prof_analysis, aes(x = p_passing, y = class_gpa, size = ratings, col = difficulty)) + theme_bw()
+p6_labs <- labs(title = 'Analysis of Mathematics Professors', x = 'Proportion Passing', y = 'Class GPA')
+p6_color <- scale_color_manual(values = c('#82bbed','#5690c4','#2666a0','#0c5496','#003668'))
+p6_guides <- guides(colour = guide_legend(override.aes = list(size = 6)))
+p6 + p6_labs + facet_grid(.~instructor) + geom_point() + p6_guides + p6_color
+```
+
+I separated the data for this visual by each of the professors to better analyze the results. On the x-axis is the proportion of students who passed the class and on the y-axis is the class gpa. Also, the larger the size of the dot the higher the rating the professor received on Rate My Professor. Then, the difficulty rating is color coded by the legend on the right side of the graph. The more difficult the class was rated, the darker the color of the dot.
+
+One of the most obvious correlations I saw from this graph was from the professor Daniel Erman. He was given somewhat of a lower difficulty rating but was given the highest overall positive rating of all the professors. Also, he had quite a few classes that had a higher average gpa and a high proportion of students passing. 
+
+What was unexpected from this data was from the professor Joseph Miller. Of all the professors, he was rated the worst by students and was also rated as difficult; however, there seems to be a subset of classes that he taught for which a lot of students passed and another subset of classes that he taught for which a lot of students failed. Before wrapping up the analysis of these grades, it might be interesting to see what kind of classes Joseph Miller taught to better understand why the data looks the way it does.
+
+```{r}
+prof_analysis[which(prof_analysis$instructor == 'DANIEL ERMAN'),c(1,3,9)]
+```
+
+It looks like one of the classes he taught, Calculus and Analytic Geometry 2, had a consistent average GPA below a 3.0 while the other courses were not quite as low. With a quick google search it turns out his emphasis is algebraic and commutative algebra. It could have been that those classes just had less difficult subject matter or it could be that he was more enthusiastic about teaching those classes. 
+
+## Conclusion
+
+This data was extremely fun to work with. Not only was the task of compiling all of the data together and cleaning it in an efficient manner fun, but the results that came out of this data were interesting. Even though I have finished this project, I would like to explore the data a little bit more to find results for some of my unanswered questions. One of the biggest tasks I did not get around to doing was using machine learning to predict GPA. Earlier, when I created a column for claffifying GPA's as below or above average, my goal was to collect enough data and create a clean data frame that could be used to find the predictive factors of a class having above or below an average GPA. Also, I would have liked to have further investigated other subjects other than Mathematics. One of the findings I discovered early on in the data was that most classes related to the medical field had consistently high average GPA scores. In the future, it would be fun to collect all of these courses and analyze the information associated with them such as number of students, year, semester, professor, and so on. All in all, I am thrilled to have completed my first full data analysis project.
