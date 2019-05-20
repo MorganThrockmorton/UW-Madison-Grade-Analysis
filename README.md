@@ -4,7 +4,7 @@
 
 This project was a term project for a statistical computing course taught at California State University, Sacramento. We were asked to use the data given on grades from University of Wisconsin, Madison from 2006 to 2017 that can be found [here](https://www.kaggle.com/Madgrades/uw-madison-courses) on Kaggle to answer various questions. 
 
-The project was done using R script files and presented in RMarkdown format. I encourage those who would like to see an overview of the project to check out the [HTML output of the RMarkdown file](/index.html). This file does not contain every line of code, library, or package I used; however, it goes in depth about the decisions and direction I took throughout the process of my analysis.
+The project was done using R script files and presented in RMarkdown format. I encourage those who would like to see an overview of the project to check out the [HTML output of the RMarkdown file](https://morganthrockmorton.github.io/UW-Madison-Grade-Analysis/). This file does not contain every line of code, library, or package I used; however, it goes in depth about the decisions and direction I took throughout the process of my analysis.
 
 For an in depth overview of my project, I have provided the following information.
 
@@ -33,4 +33,4 @@ If there is a dependency that I missed, please let me know.
 
 * [UWMadison](/UWMadison.Rmd) is the markdown file I used for the project. This file contains every line of code that I used for the project along with my analysis. To run this file, you will have to "knit" the document in RStudio.
 
-* [UW_Analysis_Term_Project_View](/index.html) is the HTML output of the RMarkdown file.
+* [UW_Analysis_Term_Project_View](https://morganthrockmorton.github.io/UW-Madison-Grade-Analysis/) is the HTML output of the RMarkdown file.
